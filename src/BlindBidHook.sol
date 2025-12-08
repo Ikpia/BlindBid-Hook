@@ -327,5 +327,24 @@ contract BlindBidHook is BaseHook {
             && block.timestamp >= auction.startTime 
             && block.timestamp < auction.endTime;
     }
+
+    /**
+     * @notice Get all bidders for an auction
+     * @param poolId The pool ID
+     * @return bidders Array of bidder addresses
+     */
+    function getBidders(PoolId poolId) external view returns (address[] memory) {
+        return auctions[poolId].bidders;
+    }
+
+    /**
+     * @notice Check if address has submitted a bid
+     * @param poolId The pool ID
+     * @param bidder The address to check
+     * @return hasSubmitted Whether the address has submitted a bid
+     */
+    function hasSubmittedBid(PoolId poolId, address bidder) external view returns (bool) {
+        return hasBid[poolId][bidder];
+    }
 }
 
