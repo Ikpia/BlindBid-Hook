@@ -297,6 +297,16 @@ contract BlindBidHook is BaseHook {
     }
 
     /**
+     * @notice Get encrypted bid for a specific bidder
+     * @param poolId The pool ID
+     * @param bidder The bidder address
+     * @return bid The encrypted bid amount
+     */
+    function getBid(PoolId poolId, address bidder) external view returns (euint64) {
+        return bids[poolId][bidder];
+    }
+
+    /**
      * @notice Get bidder count for an auction
      * @param poolId The pool ID
      * @return count Number of bidders
