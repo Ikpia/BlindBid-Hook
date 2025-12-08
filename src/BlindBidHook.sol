@@ -32,6 +32,10 @@ contract BlindBidHook is BaseHook {
     using CurrencySettler for Currency;
     using FHE for uint256;
 
+    // ============ Constants ============
+    uint256 public constant MIN_AUCTION_DURATION = 1 hours;
+    uint256 public constant MAX_AUCTION_DURATION = 365 days;
+
     // ============ Errors ============
     error BlindBidHook__AuctionNotActive();
     error BlindBidHook__AuctionAlreadySettled();
