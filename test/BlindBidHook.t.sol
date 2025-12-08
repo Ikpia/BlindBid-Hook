@@ -276,5 +276,50 @@ contract BlindBidHookTest is Test, Deployers {
         assertEq(auction.assetCurrency, assetCurrency);
         assertFalse(auction.settled);
     }
+
+    function testGetBidders() public {
+        // Create auction
+        vm.prank(auctioneer);
+        hook.createAuction(key, bidCurrency, assetCurrency, AUCTION_DURATION);
+
+        // Submit bids
+        vm.prank(bidder1);
+        hook.submitBid(key, _encryptBid(100));
+
+        vm.prank(bidder2);
+        hook.submitBid(key, _encryptBid(200));
+
+        // Get bidders
+        address[] memory bidders = hook.getBidders(poolId);
+        assertEq(bidders.length, 2);
+        assertEq(bidders[0], bidder1);
+        assertEq(bidders[1], bidder2);
+    }
+
+    function testHasSubmittedBid() public {
+        // Create auction
+        vm.prank(auctioneer);
+        hook.createAuction(key, bidCurrency, assetCurrency, AUCTION_DURATION);
+
+        // Submit bid
+        vm.prank(bidder1);
+        hook.submitBid(key, _encryptBid(100));
+
+        // Check bid status
+        assertTrue(hook.hasSubmittedBid(poolId, bidder1));
+        assertFalse(hook.hasSubmittedBid(poolId, bidder2));
+    }
+
+    function testRevertInvalidDuration() public {
+        // Try to create auction with zero duration
+        vm.prank(auctioneer);
+        vm.expectRevert(BlindBidHook.BlindBidHook__InvalidDuration.selector);
+        hook.createAuction(key, bidCurrency, assetCurrency, 0);
+
+        // Try to create auction with excessive duration
+        vm.prank(auctioneer);
+        vm.expectRevert(BlindBidHook.BlindBidHook__InvalidDuration.selector);
+        hook.createAuction(key, bidCurrency, assetCurrency, 366 days);
+    }
 }
 
