@@ -21,6 +21,10 @@ import {IFHERC20} from "./interface/IFHERC20.sol";
  * @dev Allows users to submit encrypted bids for NFTs or tokens listed in pools.
  * All bids remain completely hidden until auction closes. Winner determined by
  * highest encrypted bid without revealing losing bids.
+ * 
+ * @custom:security This contract uses FHE (Fully Homomorphic Encryption) to maintain
+ * bid privacy. All bid amounts remain encrypted during the auction phase.
+ * Only the winning bid is decrypted during settlement.
  */
 contract BlindBidHook is BaseHook {
     using PoolIdLibrary for PoolKey;
