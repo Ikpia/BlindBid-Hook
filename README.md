@@ -1,8 +1,16 @@
-BlindBid Hook
+# BlindBid Hook
 
-BlindBid Hook: Encrypted NFT/Token Auctions in AMM Pools
+**Encrypted NFT/Token Auctions in AMM Pools**
+
+## Overview
+
+BlindBid Hook enables fully encrypted auctions for NFTs and tokens within Uniswap v4 pools. This is the first implementation of encrypted auctions using Uniswap v4 hooks, leveraging Fhenix FHE (Fully Homomorphic Encryption) technology.
+
+## The Innovation
+
 The Gap: All winning hooks focused on swaps/lending. Nobody built encrypted auctions using hooks.
-Innovation:
+
+### Key Features:
 
 Users submit encrypted bids (euint64) for NFTs or rare tokens listed in special pools
 All bids completely hidden until auction closes
