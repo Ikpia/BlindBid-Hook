@@ -175,6 +175,11 @@ contract BlindBidHook is BaseHook {
         // Ensure bid is greater than zero
         FHE.req(FHE.gt(bid, FHE.asEuint64(0)));
 
+        // Ensure bidder has sufficient encrypted balance
+        IFHERC20 bidToken = IFHERC20(Currency.unwrap(auction.bidCurrency));
+        euint64 balance = bidToken.encBalances(msg.sender);
+        FHE.req(FHE.gte(balance, bid));
+
         // Store bid
         bids[poolId][msg.sender] = bid;
         hasBid[poolId][msg.sender] = true;
