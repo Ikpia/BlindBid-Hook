@@ -22,3 +22,4 @@ typechain-types/
 
 .vscode
 CONTEXT/
+.github/workflows/test.yml
