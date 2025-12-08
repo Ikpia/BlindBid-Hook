@@ -57,3 +57,57 @@ High-value NFT sales (CryptoPunks, Bored Apes)
 Rare token allocations (presales, IDOs)
 Liquidation auctions (hide distressed asset prices)
 Treasury token sales (DAOs selling assets privately)
+
+## Installation
+
+```bash
+# Install dependencies
+pnpm install
+
+# Run tests
+forge test --via-ir
+
+# Deploy
+forge script script/DeployBlindBidHook.s.sol
+```
+
+## Usage
+
+### Creating an Auction
+
+```solidity
+// Create auction with 1 day duration
+hook.createAuction(
+    poolKey,
+    bidCurrency,    // Currency for bids (e.g., USDC)
+    assetCurrency,  // Asset being auctioned
+    1 days          // Duration
+);
+```
+
+### Submitting a Bid
+
+```solidity
+// Submit encrypted bid
+InEuint64 memory encryptedBid = encryptBid(1000);
+hook.submitBid(poolKey, encryptedBid);
+```
+
+### Settling an Auction
+
+```solidity
+// After auction ends, settle to determine winner
+hook.settleAuction(poolKey);
+```
+
+## Architecture
+
+See [ARCHITECTURE.md](docs/ARCHITECTURE.md) for detailed architecture documentation.
+
+## Security
+
+See [AUDIT.md](docs/AUDIT.md) for security considerations and audit notes.
+
+## License
+
+MIT
