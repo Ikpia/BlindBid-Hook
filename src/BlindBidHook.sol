@@ -14,6 +14,7 @@ import {CurrencySettler} from "@uniswap/v4-core/test/utils/CurrencySettler.sol";
 // FHE Imports
 import {FHE, InEuint64, euint64, ebool} from "@fhenixprotocol/cofhe-contracts/FHE.sol";
 import {IFHERC20} from "./interface/IFHERC20.sol";
+import {IBlindBidHook} from "../interfaces/IBlindBidHook.sol";
 
 /**
  * @title BlindBidHook
@@ -26,7 +27,7 @@ import {IFHERC20} from "./interface/IFHERC20.sol";
  * bid privacy. All bid amounts remain encrypted during the auction phase.
  * Only the winning bid is decrypted during settlement.
  */
-contract BlindBidHook is BaseHook {
+contract BlindBidHook is BaseHook, IBlindBidHook {
     using PoolIdLibrary for PoolKey;
     using CurrencyLibrary for Currency;
     using CurrencySettler for Currency;
