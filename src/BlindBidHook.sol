@@ -120,6 +120,11 @@ contract BlindBidHook is BaseHook {
     ) external onlyValidPools(key.hooks) {
         PoolId poolId = key.toId();
         
+        // Validate duration
+        if (duration == 0 || duration > 365 days) {
+            revert BlindBidHook__InvalidDuration();
+        }
+        
         // Check if auction already exists
         if (auctions[poolId].endTime != 0) {
             revert BlindBidHook__AuctionAlreadyExists();
