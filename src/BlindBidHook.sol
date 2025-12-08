@@ -129,7 +129,7 @@ contract BlindBidHook is BaseHook {
         PoolId poolId = key.toId();
         
         // Validate duration
-        if (duration == 0 || duration > 365 days) {
+        if (duration < MIN_AUCTION_DURATION || duration > MAX_AUCTION_DURATION) {
             revert BlindBidHook__InvalidDuration();
         }
         
