@@ -257,6 +257,7 @@ contract BlindBidHook is BaseHook, IBlindBidHook {
 
         // Second pass: identify the winner by comparing each bid to max
         // Only decrypt the comparison result, not the bid amounts
+        // This maintains privacy for all losing bids
         for (uint256 i = 0; i < auction.bidders.length; i++) {
             address bidder = auction.bidders[i];
             euint64 currentBid = bids[poolId][bidder];
@@ -265,9 +266,12 @@ contract BlindBidHook is BaseHook, IBlindBidHook {
             ebool isMax = FHE.eq(currentBid, maxBid);
             
             // Decrypt only the comparison result, not the bid amount
+            // This ensures losing bids remain encrypted
             if (FHE.decrypt(isMax) && !winnerFound) {
                 winner = bidder;
                 winnerFound = true;
+                // Break after finding first winner (in case of ties, first bidder wins)
+                break;
             }
         }
 
