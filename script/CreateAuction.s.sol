@@ -4,6 +4,7 @@ pragma solidity ^0.8.25;
 import "forge-std/Script.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
+import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {BlindBidHook} from "../src/BlindBidHook.sol";
 
 /// @notice Example script for creating an auction
@@ -26,7 +27,7 @@ contract CreateAuctionScript is Script {
                 : Currency.wrap(bidTokenAddress),
             fee: 3000,
             tickSpacing: 60,
-            hooks: hook.hooks()
+            hooks: IHooks(address(hook))
         });
         
         // Create auction with 7 day duration

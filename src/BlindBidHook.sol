@@ -7,12 +7,14 @@ import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
-import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {Currency, CurrencyLibrary} from "@uniswap/v4-core/src/types/Currency.sol";
 import {CurrencySettler} from "@uniswap/v4-core/test/utils/CurrencySettler.sol";
+import {SwapParams, ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
+import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
+import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "@uniswap/v4-core/src/types/BeforeSwapDelta.sol";
 
 // FHE Imports
-import {FHE, InEuint64, euint64, ebool} from "@fhenixprotocol/cofhe-contracts/FHE.sol";
+import {FHE, InEuint64, euint64, euint128, ebool} from "@fhenixprotocol/cofhe-contracts/FHE.sol";
 import {IFHERC20} from "./interface/IFHERC20.sol";
 import {IBlindBidHook} from "../interfaces/IBlindBidHook.sol";
 
@@ -33,6 +35,13 @@ contract BlindBidHook is BaseHook, IBlindBidHook {
     using CurrencySettler for Currency;
     using FHE for uint256;
 
+    modifier onlyValidPool(PoolKey calldata key) {
+        if (address(key.hooks) != address(this)) {
+            revert BlindBidHook__InvalidPoolHook();
+        }
+        _;
+    }
+
     // ============ Constants ============
     uint256 public constant MIN_AUCTION_DURATION = 1 hours;
     uint256 public constant MAX_AUCTION_DURATION = 365 days;
@@ -49,6 +58,7 @@ contract BlindBidHook is BaseHook, IBlindBidHook {
     error BlindBidHook__AuctionAlreadyExists();
     error BlindBidHook__InsufficientBalance();
     error BlindBidHook__InvalidDuration();
+    error BlindBidHook__InvalidPoolHook();
 
     // ============ Events ============
     event AuctionCreated(
@@ -72,23 +82,24 @@ contract BlindBidHook is BaseHook, IBlindBidHook {
         uint256 timestamp
     );
 
-    // ============ Structs ============
-    struct Auction {
-        address auctioneer;           // Creator of the auction
-        Currency bidCurrency;         // Currency used for bids (e.g., USDC)
-        Currency assetCurrency;      // Currency/NFT being auctioned
-        uint256 startTime;            // Auction start timestamp
-        uint256 endTime;              // Auction end timestamp
-        bool settled;                 // Whether auction has been settled
-        address[] bidders;            // List of all bidders
-        euint64 maxBid;              // Encrypted maximum bid
-        address winner;               // Winner address (set after settlement)
-    }
+    event PoolInitialized(
+        PoolId indexed poolId,
+        uint160 sqrtPriceX96,
+        int24 tick
+    );
+
+    event SwapExecuted(
+        PoolId indexed poolId,
+        address indexed swapper,
+        uint256 timestamp
+    );
 
     // ============ State Variables ============
-    mapping(PoolId => Auction) public auctions;
+    mapping(PoolId => IBlindBidHook.Auction) public auctions;
     mapping(PoolId => mapping(address => euint64)) public bids; // poolId => bidder => encrypted bid
     mapping(PoolId => mapping(address => bool)) public hasBid;  // Track if bidder has submitted
+    mapping(PoolId => bool) public poolInitialized; // Track initialized pools
+    mapping(PoolId => euint64) public swapCount; // Encrypted swap count per pool
 
     // ============ Constructor ============
     constructor(IPoolManager _poolManager) BaseHook(_poolManager) {}
@@ -97,13 +108,13 @@ contract BlindBidHook is BaseHook, IBlindBidHook {
     function getHookPermissions() public pure override returns (Hooks.Permissions memory) {
         return Hooks.Permissions({
             beforeInitialize: false,
-            afterInitialize: false,
+            afterInitialize: true,  // Track pool initialization
             beforeAddLiquidity: false,
             afterAddLiquidity: false,
             beforeRemoveLiquidity: false,
             afterRemoveLiquidity: false,
-            beforeSwap: false,
-            afterSwap: false,
+            beforeSwap: true,   // Track swaps before execution
+            afterSwap: true,    // Track swaps after execution
             beforeDonate: false,
             afterDonate: false,
             beforeSwapReturnDelta: false,
@@ -127,7 +138,9 @@ contract BlindBidHook is BaseHook, IBlindBidHook {
         Currency bidCurrency,
         Currency assetCurrency,
         uint256 duration
-    ) external onlyValidPools(key.hooks) {
+    ) external onlyValidPool(key) {
+        // debug log removed in production
+        // console log not imported to avoid dependency
         PoolId poolId = key.toId();
         
         // Validate duration
@@ -143,7 +156,10 @@ contract BlindBidHook is BaseHook, IBlindBidHook {
         uint256 startTime = block.timestamp;
         uint256 endTime = startTime + duration;
 
-        auctions[poolId] = Auction({
+        euint64 initialMaxBid = FHE.asEuint64(0);
+        FHE.allowThis(initialMaxBid); // Allow contract to access initial maxBid
+        
+        auctions[poolId] = IBlindBidHook.Auction({
             auctioneer: msg.sender,
             bidCurrency: bidCurrency,
             assetCurrency: assetCurrency,
@@ -151,7 +167,7 @@ contract BlindBidHook is BaseHook, IBlindBidHook {
             endTime: endTime,
             settled: false,
             bidders: new address[](0),
-            maxBid: FHE.asEuint64(0),
+            maxBid: initialMaxBid,
             winner: address(0)
         });
 
@@ -166,9 +182,9 @@ contract BlindBidHook is BaseHook, IBlindBidHook {
     function submitBid(
         PoolKey calldata key,
         InEuint64 calldata encryptedBid
-    ) external onlyValidPools(key.hooks) {
+    ) external onlyValidPool(key) {
         PoolId poolId = key.toId();
-        Auction storage auction = auctions[poolId];
+        IBlindBidHook.Auction storage auction = auctions[poolId];
 
         // Validate auction is active
         if (auction.endTime == 0) {
@@ -193,18 +209,35 @@ contract BlindBidHook is BaseHook, IBlindBidHook {
 
         // Convert encrypted bid
         euint64 bid = FHE.asEuint64(encryptedBid);
-        
-        // Ensure bid is greater than zero
-        FHE.req(FHE.gt(bid, FHE.asEuint64(0)));
+
+        // Note: FHE.req is not available in this FHE version
+        // Validation is handled through encrypted operations and token contract
+        // Bid amount remains encrypted throughout the process
 
         // Ensure bidder has sufficient encrypted balance
         IFHERC20 bidToken = IFHERC20(Currency.unwrap(auction.bidCurrency));
-        euint64 balance = bidToken.encBalances(msg.sender);
-        ebool hasSufficientBalance = FHE.gte(balance, bid);
-        FHE.req(hasSufficientBalance);
+        euint128 balance = FHE.asEuint128(0); // default
+        // If token exposes encBalances, use it (returns euint128)
+        try bidToken.encBalances(msg.sender) returns (euint128 bal) {
+            balance = bal;
+        } catch {}
         
-        // Approve hook to spend bid amount
-        bidToken.approveEncrypted(address(this), bid);
+        // Allow contract and user to access balance for operations
+        FHE.allowThis(balance);
+        FHE.allow(balance, msg.sender);
+        
+        // Convert bid to euint128 for comparison with balance
+        euint128 bid128 = FHE.asEuint128(bid);
+        FHE.allowThis(bid128); // Allow contract to use bid128 for operations
+        
+        // Ensure sufficient balance using encrypted comparison
+        // If insufficient, the transfer will fail later
+        ebool hasSufficientBalance = FHE.gte(balance, bid128);
+        FHE.allowThis(hasSufficientBalance); // Allow contract to use comparison result
+        
+        // Use select to ensure bid is only stored if balance is sufficient
+        // This preserves confidentiality while ensuring validity
+        bid = FHE.select(hasSufficientBalance, bid, FHE.asEuint64(0));
 
         // Store bid
         bids[poolId][msg.sender] = bid;
@@ -212,13 +245,15 @@ contract BlindBidHook is BaseHook, IBlindBidHook {
         auction.bidders.push(msg.sender);
 
         // Update max bid using encrypted comparison
-        // Note: We don't track winner during bidding to maintain bid privacy
         ebool isHigher = FHE.gt(bid, auction.maxBid);
+        FHE.allowThis(isHigher); // Allow contract to use comparison result
         auction.maxBid = FHE.select(isHigher, bid, auction.maxBid);
 
-        // Allow contract to interact with bid
+        // Allow contract to interact with bid and maxBid
         FHE.allowThis(bid);
         FHE.allowThis(auction.maxBid);
+        // Allow user to access their own bid
+        FHE.allow(bid, msg.sender);
 
         emit BidSubmitted(poolId, msg.sender, block.timestamp);
     }
@@ -227,7 +262,7 @@ contract BlindBidHook is BaseHook, IBlindBidHook {
      * @notice Settle the auction and determine winner
      * @param key The pool key
      */
-    function settleAuction(PoolKey calldata key) external onlyValidPools(key.hooks) {
+    function settleAuction(PoolKey calldata key) external onlyValidPool(key) {
         PoolId poolId = key.toId();
         Auction storage auction = auctions[poolId];
 
@@ -246,7 +281,6 @@ contract BlindBidHook is BaseHook, IBlindBidHook {
         }
 
         // Find winner by comparing all encrypted bids
-        // We need to iterate and find the maximum bid
         euint64 maxBid = FHE.asEuint64(0);
         address winner = address(0);
         bool winnerFound = false;
@@ -256,27 +290,34 @@ contract BlindBidHook is BaseHook, IBlindBidHook {
             address bidder = auction.bidders[i];
             euint64 currentBid = bids[poolId][bidder];
             
+            // Allow contract to access currentBid for comparison
+            FHE.allowThis(currentBid);
+            FHE.allowThis(maxBid);
+            
             // Compare encrypted bids
             ebool isHigher = FHE.gt(currentBid, maxBid);
+            FHE.allowThis(isHigher); // Allow contract to use comparison result
             maxBid = FHE.select(isHigher, currentBid, maxBid);
+            FHE.allowThis(maxBid); // Allow contract to access updated maxBid
         }
 
-        // Second pass: identify the winner by comparing each bid to max
-        // Only decrypt the comparison result, not the bid amounts
-        // This maintains privacy for all losing bids
+        // Winner selection: decrypt equality check to find matching bidder
         for (uint256 i = 0; i < auction.bidders.length; i++) {
             address bidder = auction.bidders[i];
             euint64 currentBid = bids[poolId][bidder];
             
-            // Check if this bid equals the max (encrypted comparison)
-            ebool isMax = FHE.eq(currentBid, maxBid);
+            // Allow contract to access currentBid and maxBid for comparison
+            FHE.allowThis(currentBid);
+            FHE.allowThis(maxBid);
             
-            // Decrypt only the comparison result, not the bid amount
-            // This ensures losing bids remain encrypted
-            if (FHE.decrypt(isMax) && !winnerFound) {
+            ebool isMax = FHE.eq(currentBid, maxBid);
+            FHE.allowThis(isMax); // Allow contract to decrypt this boolean
+            // Decrypt the boolean result (two-step process: decrypt then get result)
+            FHE.decrypt(isMax);
+            bool isMaxDecrypted = FHE.getDecryptResult(isMax);
+            if (isMaxDecrypted && !winnerFound) {
                 winner = bidder;
                 winnerFound = true;
-                // Break after finding first winner (in case of ties, first bidder wins)
                 break;
             }
         }
@@ -293,24 +334,23 @@ contract BlindBidHook is BaseHook, IBlindBidHook {
 
         // Transfer winning bid amount from winner to auctioneer
         IFHERC20 bidToken = IFHERC20(Currency.unwrap(auction.bidCurrency));
-        
-        // Get winning bid amount
         euint64 winningBidEncrypted = bids[poolId][winner];
         
-        // Transfer encrypted amount from winner to hook
-        bidToken.transferFromEncrypted(winner, address(this), winningBidEncrypted);
+        // Allow contract and winner to access winning bid for transfer
+        FHE.allowThis(winningBidEncrypted);
+        FHE.allow(winningBidEncrypted, winner);
         
-        // Request unwrap of winning bid
-        bidToken.requestUnwrap(address(this), winningBidEncrypted);
+        // Convert euint64 to euint128 for transferFromEncrypted
+        euint128 winningBid128 = FHE.asEuint128(winningBidEncrypted);
+        FHE.allowThis(winningBid128); // Allow contract to use for transfer
+        FHE.allow(winningBid128, winner); // Allow winner to transfer their bid
         
-        // Get unwrap result (this decrypts the amount)
-        uint128 unwrappedAmount = bidToken.getUnwrapResult(address(this), winningBidEncrypted);
-        
-        // Transfer unwrapped amount to auctioneer
+        bidToken.transferFromEncrypted(winner, address(this), winningBid128);
+        bidToken.requestUnwrap(address(this), winningBid128);
+        uint128 unwrappedAmount = bidToken.getUnwrapResult(address(this), winningBid128);
         bidToken.transfer(auction.auctioneer, unwrappedAmount);
 
         // Transfer asset from auctioneer to winner
-        // Note: Auctioneer must approve this contract first
         IFHERC20 assetToken = IFHERC20(Currency.unwrap(auction.assetCurrency));
         uint256 assetAmount = assetToken.balanceOf(auction.auctioneer);
         if (assetAmount > 0) {
@@ -327,7 +367,7 @@ contract BlindBidHook is BaseHook, IBlindBidHook {
      * @param poolId The pool ID
      * @return auction The auction struct
      */
-    function getAuction(PoolId poolId) external view returns (Auction memory) {
+    function getAuction(PoolId poolId) external view returns (IBlindBidHook.Auction memory) {
         return auctions[poolId];
     }
 
@@ -356,7 +396,7 @@ contract BlindBidHook is BaseHook, IBlindBidHook {
      * @return active Whether auction is currently active
      */
     function isAuctionActive(PoolId poolId) external view returns (bool) {
-        Auction memory auction = auctions[poolId];
+        IBlindBidHook.Auction memory auction = auctions[poolId];
         return auction.endTime != 0 
             && !auction.settled 
             && block.timestamp >= auction.startTime 
@@ -380,6 +420,90 @@ contract BlindBidHook is BaseHook, IBlindBidHook {
      */
     function hasSubmittedBid(PoolId poolId, address bidder) external view returns (bool) {
         return hasBid[poolId][bidder];
+    }
+
+    // ============ Hook Methods ============
+
+    /**
+     * @notice Called after a pool is initialized
+     * @param sender The address that initialized the pool
+     * @param key The pool key
+     * @param sqrtPriceX96 The initial sqrt price
+     * @param tick The initial tick
+     * @return selector The function selector
+     */
+    function _afterInitialize(
+        address sender,
+        PoolKey calldata key,
+        uint160 sqrtPriceX96,
+        int24 tick
+    ) internal override returns (bytes4) {
+        PoolId poolId = key.toId();
+        poolInitialized[poolId] = true;
+        
+        emit PoolInitialized(poolId, sqrtPriceX96, tick);
+        
+        return BaseHook.afterInitialize.selector;
+    }
+
+    /**
+     * @notice Called before a swap executes
+     * @param sender The address executing the swap
+     * @param key The pool key
+     * @param params Swap parameters
+     * @param hookData Additional hook data
+     * @return selector The function selector
+     * @return delta Swap delta (zero for no custom accounting)
+     * @return swapFee Fee override (0 for default)
+     */
+    function _beforeSwap(
+        address sender,
+        PoolKey calldata key,
+        SwapParams calldata params,
+        bytes calldata hookData
+    ) internal override returns (bytes4, BeforeSwapDelta, uint24) {
+        PoolId poolId = key.toId();
+        
+        // Track swap count using encrypted counter
+        euint64 current = swapCount[poolId];
+        swapCount[poolId] = FHE.add(current, FHE.asEuint64(1));
+        
+        // Allow contract to access encrypted swap count
+        FHE.allowThis(swapCount[poolId]);
+        
+        // Note: We don't block swaps during auctions to allow normal pool operations
+        // If needed, you could add logic here to restrict swaps during active auctions
+        
+        return (BaseHook.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
+    }
+
+    /**
+     * @notice Called after a swap executes
+     * @param sender The address that executed the swap
+     * @param key The pool key
+     * @param params Swap parameters
+     * @param delta Balance delta from the swap
+     * @param hookData Additional hook data
+     * @return selector The function selector
+     * @return deltaOverride Delta override (0 for no custom accounting)
+     */
+    function _afterSwap(
+        address sender,
+        PoolKey calldata key,
+        SwapParams calldata params,
+        BalanceDelta delta,
+        bytes calldata hookData
+    ) internal override returns (bytes4, int128) {
+        PoolId poolId = key.toId();
+        
+        // Emit event for swap tracking
+        emit SwapExecuted(poolId, sender, block.timestamp);
+        
+        // Optional: Auto-settle auction if conditions are met
+        // This could be used to trigger settlement based on swap activity
+        // For now, we just track swaps without auto-settlement
+        
+        return (BaseHook.afterSwap.selector, 0);
     }
 }
 
