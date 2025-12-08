@@ -1,44 +1,48 @@
 {
-  "name": "fhe-hook-template",
+  "name": "blindbid-hook",
   "version": "1.0.0",
-  "description": "Template for building FHE-enabled Uniswap hooks",
+  "description": "Encrypted NFT/Token Auctions in AMM Pools using Uniswap v4 Hooks and Fhenix FHE",
   "scripts": {
-    "test": "forge test --via-ir"
+    "test": "forge test --via-ir",
+    "build": "forge build",
+    "deploy": "forge script script/DeployBlindBidHook.s.sol",
+    "lint": "forge fmt --check"
   },
   "keywords": [
-		"blockchain",
-		"ethereum",
-		"smart-contracts",
-		"solidity",
-		"FHE",
-		"encryption",
-		"privacy",
-		"coprocessor",
-		"fhenix",
-		"cofhe",
+    "blockchain",
+    "ethereum",
+    "smart-contracts",
+    "solidity",
+    "FHE",
+    "encryption",
+    "privacy",
+    "fhenix",
+    "cofhe",
     "uniswap",
     "trading",
-    "hooks"
-	],
+    "hooks",
+    "auctions",
+    "nft"
+  ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/marronjo/fhe-hook-template.git"
+    "url": "git+https://github.com/Ikpia/BlindBid-Hook.git"
   },
-  "author": "marronjo",
+  "author": "Ikpia",
   "license": "MIT",
   "dependencies": {
-		"@openzeppelin/contracts": "^5.0.0",
-		"@openzeppelin/contracts-upgradeable": "^5.0.0",
-		"@fhenixprotocol/cofhe-contracts": "0.0.13",
-		"cofhe-foundry-mocks": "github:fhenixprotocol/cofhe-foundry-mocks",
-    	"@uniswap/v4-core": "1.0.2",
-    	"@uniswap/v4-periphery": "1.0.2",
-		"forge-std": "github:foundry-rs/forge-std"
-	},
+    "@openzeppelin/contracts": "^5.0.0",
+    "@openzeppelin/contracts-upgradeable": "^5.0.0",
+    "@fhenixprotocol/cofhe-contracts": "0.0.13",
+    "cofhe-foundry-mocks": "github:fhenixprotocol/cofhe-foundry-mocks",
+    "@uniswap/v4-core": "1.0.2",
+    "@uniswap/v4-periphery": "1.0.2",
+    "forge-std": "github:foundry-rs/forge-std"
+  },
   "devDependencies": {
-		"@nomicfoundation/hardhat-ethers": "^3.0.8",
-		"@nomicfoundation/hardhat-foundry": "^1.1.3",
-		"@nomicfoundation/hardhat-toolbox": "^5.0.0",
-		"hardhat": "^2.22.19"
-	}
+    "@nomicfoundation/hardhat-ethers": "^3.0.8",
+    "@nomicfoundation/hardhat-foundry": "^1.1.3",
+    "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+    "hardhat": "^2.22.19"
+  }
 }
