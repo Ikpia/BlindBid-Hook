@@ -186,6 +186,11 @@ contract BlindBidHook is BaseHook, IBlindBidHook {
             revert BlindBidHook__BidAlreadySubmitted();
         }
 
+        // Check bidder limit to prevent gas issues
+        if (auction.bidders.length >= MAX_BIDDERS_PER_AUCTION) {
+            revert BlindBidHook__NoBidsSubmitted(); // Reuse error for simplicity
+        }
+
         // Convert encrypted bid
         euint64 bid = FHE.asEuint64(encryptedBid);
         
