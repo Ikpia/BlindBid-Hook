@@ -36,6 +36,7 @@ contract BlindBidHook is BaseHook, IBlindBidHook {
     // ============ Constants ============
     uint256 public constant MIN_AUCTION_DURATION = 1 hours;
     uint256 public constant MAX_AUCTION_DURATION = 365 days;
+    uint256 public constant MAX_BIDDERS_PER_AUCTION = 1000; // Gas limit consideration
 
     // ============ Errors ============
     error BlindBidHook__AuctionNotActive();
