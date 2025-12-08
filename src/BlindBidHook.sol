@@ -37,6 +37,8 @@ contract BlindBidHook is BaseHook {
     error BlindBidHook__NoBidsSubmitted();
     error BlindBidHook__InvalidCurrency();
     error BlindBidHook__AuctionAlreadyExists();
+    error BlindBidHook__InsufficientBalance();
+    error BlindBidHook__InvalidDuration();
 
     // ============ Events ============
     event AuctionCreated(
