@@ -1,113 +1,119 @@
 # BlindBid Hook
 
-**Encrypted NFT/Token Auctions in AMM Pools**
+Encrypted, privacy-preserving NFT/token auctions inside Uniswap v4 pools using Fhenix Fully Homomorphic Encryption (FHE).
 
-## Overview
+## Badges
+[![Tests](https://img.shields.io/badge/tests-forge-green)](#tests--coverage) [![Coverage](https://img.shields.io/badge/coverage-target%20100%25-blue)](#tests--coverage) [![License](https://img.shields.io/badge/license-MIT-lightgrey)](#license)
 
-BlindBid Hook enables fully encrypted auctions for NFTs and tokens within Uniswap v4 pools. This is the first implementation of encrypted auctions using Uniswap v4 hooks, leveraging Fhenix FHE (Fully Homomorphic Encryption) technology.
+## Description
+BlindBid Hook lets pools run sealed-bid auctions where bids stay encrypted end-to-end. The hook handles encrypted bid submission, encrypted max-bid selection, and settlement without revealing losing bids. It leverages Fhenix FHE types (`euint64`, `euint128`, `ebool`) and Uniswap v4 hook callbacks (`afterInitialize`, `beforeSwap`, `afterSwap`).
 
-## The Innovation
+## Problem Statement
+On-chain auctions leak bid amounts, enabling sniping, collusion, and value leakage for sellers. There is no native Uniswap v4 primitive to run privacy-preserving auctions within pools.
 
-The Gap: All winning hooks focused on swaps/lending. Nobody built encrypted auctions using hooks.
+## Solution & Impact (incl. financial impact)
+- Sealed bids via FHE prevent price discovery gaming and last-block snipes, improving auction fairness.
+- Confidential price discovery can lift final clearing prices for sellers (less fear of being picked off), and reduce bidder overpayment risk, driving healthier participation.
+- Runs inside AMM pools, so liquidity and settlement stay composable with the rest of Uniswap.
 
-### Key Features:
+## How it Works (high level)
+- Auctioneer lists an asset in a pool and starts an auction window.
+- Bidders submit encrypted bids (`InEuint64`) with FHE permissions granted to the hook.
+- Hook tracks encrypted maxima with `FHE.gt`/`FHE.select`; losing bids never decrypt.
+- On settlement, the hook decrypts only the winning amount, transfers encrypted funds, unwraps, and moves the asset/NFT to the winner.
 
-Users submit encrypted bids (euint64) for NFTs or rare tokens listed in special pools
-All bids completely hidden until auction closes
-Hook aggregates encrypted bids using Fhenix FHE operations (max, comparison)
-Winner determined by highest encrypted bid WITHOUT revealing losing bids
-Losers never know how much winner paid (prevents price discovery gaming)
+```mermaid
+flowchart TD
+  A[Auctioneer] -->|createAuction| H[BlindBidHook]
+  B[Bidder] -->|submit encrypted bid| H
+  H -->|FHE select max| H
+  T[Timer ends] -->|settleAuction| H
+  H -->|decrypt winner only| C[Settlement]
+  C -->|asset to winner| B
+  C -->|payment to auctioneer| A
+```
 
-Why It Wins:
+## Technical Flow (hooks + encryption)
+```mermaid
+sequenceDiagram
+  participant PM as PoolManager
+  participant Hook as BlindBidHook
+  participant Task as Fhenix TaskMgr (mock in tests)
+  PM->>Hook: afterInitialize()
+  Hook->>Hook: mark pool initialized
+  PM->>Hook: beforeSwap()
+  Hook->>Hook: increment encrypted swapCount (FHE.allowThis)
+  Bidders->>Hook: submitBid(poolId, InEuint64)
+  Hook->>Task: encrypted comparisons (gt/select)
+  PM->>Hook: afterSwap()
+  Auctioneer->>Hook: settleAuction()
+  Hook->>Task: decrypt winning bid (await helpers)
+  Hook->>Tokens: transferFromEncrypted + unwrap + payout
+```
 
-✅ Totally novel: First encrypted auction hook
-✅ NFT market fit: High-value NFTs need bid privacy (prevent sniping)
-✅ Pure FHE showcase: Complex encrypted comparisons (euint64.max)
-✅ Game theory impact: Changes bidding behavior when competitors are blind
-✅ Demo wow: "5 bidders, only winner knows they won, all bids stay secret"
+## Architecture & Components
+- `BlindBidHook`: main Uniswap v4 hook; manages auctions, FHE comparisons, settlement, and hook lifecycle tracking (`afterInitialize`, `beforeSwap`, `afterSwap`).
+- `MockFHERC20`: FHE-enabled mock token for encrypted balances, permissions, unwrap.
+- `CoFheTest` utilities: spins up mock Task Manager/Verifier so FHE ops work in tests.
+- `HookMiner`, `PoolKey`, `PoolId`: utilities for deriving valid hook addresses and pools.
+- Docs: deeper detail in `docs/ARCHITECTURE.md`; security notes in `docs/AUDIT.md`.
 
-Technical Flow:
-solidity// Bid submission (encrypted)
-function submitBid(PoolId poolId, inEuint64 calldata encryptedBid) external {
-    euint64 bid = TFHE.asEuint64(encryptedBid);
-    bids[poolId][msg.sender] = bid;
-    emit BidSubmitted(msg.sender); // Amount HIDDEN
-}
+## Bidder & Auctioneer Flows (user view)
+- Auctioneer: `createAuction(poolKey, bidToken, assetToken, duration)` → approve hook for asset → wait for bids → `settleAuction`.
+- Bidder: encrypt bid with signer → `submitBid(poolId, encryptedBid)` → on success, balance is checked in FHE, bid stays hidden → after settlement, either wins asset or no action.
 
-// Auction settlement (encrypted comparison)
-function settleAuction(PoolId poolId) external {
-    euint64 maxBid = TFHE.asEuint64(0);
-    address winner;
-    
-    // Find max bid (fully encrypted!)
-    for (address bidder in bidders[poolId]) {
-        euint64 currentBid = bids[poolId][bidder];
-        ebool isHigher = TFHE.gt(currentBid, maxBid);
-        maxBid = TFHE.select(isHigher, currentBid, maxBid);
-        winner = isHigher ? bidder : winner; // Simplified
-    }
-    
-    // Winner gets NFT, pays encrypted amount
-    // Losing bids NEVER revealed
+## Hook Callbacks Used
+- `afterInitialize`: marks pool as initialized and emits `PoolInitialized`.
+- `beforeSwap`: increments encrypted `swapCount` for observability; permissions granted via `FHE.allowThis`.
+- `afterSwap`: emits `SwapExecuted`.
 
+## Tests & Coverage
+- Command: `forge test --via-ir`
+- Coverage target: `forge coverage --via-ir` (aiming for 100% line/function where feasible)
+- Current suite: >50 unit/integration-style tests covering lifecycle, permissions, reverts, tie-breakers, and settlement paths. Goal remains 100+ tests spanning unit/integration/invariant buckets.
 
-Use Cases:
-
-High-value NFT sales (CryptoPunks, Bored Apes)
-Rare token allocations (presales, IDOs)
-Liquidation auctions (hide distressed asset prices)
-Treasury token sales (DAOs selling assets privately)
-
-## Installation
-
+## Installation & Setup
 ```bash
-# Install dependencies
+# Prereqs: foundryup, pnpm
 pnpm install
+forge install
 
 # Run tests
 forge test --via-ir
 
-# Deploy
-forge script script/DeployBlindBidHook.s.sol
+# Coverage (target 100%)
+forge coverage --via-ir
 ```
 
-## Usage
-
-### Creating an Auction
-
+## Usage (core flows)
+- Create auction:
 ```solidity
-// Create auction with 1 day duration
-hook.createAuction(
-    poolKey,
-    bidCurrency,    // Currency for bids (e.g., USDC)
-    assetCurrency,  // Asset being auctioned
-    1 days          // Duration
-);
+hook.createAuction(poolKey, bidCurrency, assetCurrency, 1 days);
 ```
-
-### Submitting a Bid
-
+- Submit encrypted bid:
 ```solidity
-// Submit encrypted bid
-InEuint64 memory encryptedBid = encryptBid(1000);
-hook.submitBid(poolKey, encryptedBid);
+InEuint64 memory encBid = encryptBid(1_000, bidderSigner);
+hook.submitBid(poolId, encBid);
 ```
-
-### Settling an Auction
-
+- Settle:
 ```solidity
-// After auction ends, settle to determine winner
-hook.settleAuction(poolKey);
+hook.settleAuction(poolId);
 ```
 
-## Architecture
+## Demo (local)
+1) Spin up local Anvil; deploy `MockFHERC20` and `BlindBidHook` with `forge script script/DeployBlindBidHook.s.sol --rpc-url http://localhost:8545 --broadcast`.
+2) Mint encrypted bid tokens to bidders via mock; call `allowHookAccess`.
+3) Run `createAuction`, `submitBid` (multiple bidders), then `settleAuction`.
+4) Observe events: `BidSubmitted`, `AuctionSettled`, `SwapExecuted`.
 
-See [ARCHITECTURE.md](docs/ARCHITECTURE.md) for detailed architecture documentation.
+## Roadmap
+- Expand invariant/property tests to exceed 100 total cases.
+- Add mainnet/testnet deployment scripts with canned params and TX examples.
+- Gas/UX optimizations for FHE permissioning flows.
+- Frontend demo with encrypted bid composer.
 
 ## Security
-
-See [AUDIT.md](docs/AUDIT.md) for security considerations and audit notes.
+See `docs/AUDIT.md` for security considerations and audit notes.
 
 ## License
-
 MIT
