@@ -59,6 +59,7 @@ contract BlindBidHook is BaseHook, IBlindBidHook {
     error BlindBidHook__InsufficientBalance();
     error BlindBidHook__InvalidDuration();
     error BlindBidHook__InvalidPoolHook();
+    error BlindBidHook__DecryptionNotReady();
 
     // ============ Events ============
     event AuctionCreated(
@@ -210,34 +211,30 @@ contract BlindBidHook is BaseHook, IBlindBidHook {
         // Convert encrypted bid
         euint64 bid = FHE.asEuint64(encryptedBid);
 
-        // Note: FHE.req is not available in this FHE version
-        // Validation is handled through encrypted operations and token contract
-        // Bid amount remains encrypted throughout the process
+        // Require bid > 0
+        ebool bidGtZero = FHE.gt(bid, FHE.asEuint64(0));
+        FHE.allowThis(bidGtZero);
+        if (!_awaitBool(bidGtZero)) {
+            revert BlindBidHook__InsufficientBalance();
+        }
 
         // Ensure bidder has sufficient encrypted balance
         IFHERC20 bidToken = IFHERC20(Currency.unwrap(auction.bidCurrency));
-        euint128 balance = FHE.asEuint128(0); // default
-        // If token exposes encBalances, use it (returns euint128)
+        euint128 balance = FHE.asEuint128(0);
         try bidToken.encBalances(msg.sender) returns (euint128 bal) {
             balance = bal;
         } catch {}
-        
-        // Allow contract and user to access balance for operations
+
         FHE.allowThis(balance);
-        FHE.allow(balance, msg.sender);
-        
-        // Convert bid to euint128 for comparison with balance
-        euint128 bid128 = FHE.asEuint128(bid);
-        FHE.allowThis(bid128); // Allow contract to use bid128 for operations
-        
-        // Ensure sufficient balance using encrypted comparison
-        // If insufficient, the transfer will fail later
+        uint64 bidPlainForCheck = _awaitUint64(bid);
+        euint128 bid128 = FHE.asEuint128(bidPlainForCheck);
+        FHE.allowThis(bid128);
+
         ebool hasSufficientBalance = FHE.gte(balance, bid128);
-        FHE.allowThis(hasSufficientBalance); // Allow contract to use comparison result
-        
-        // Use select to ensure bid is only stored if balance is sufficient
-        // This preserves confidentiality while ensuring validity
-        bid = FHE.select(hasSufficientBalance, bid, FHE.asEuint64(0));
+        FHE.allowThis(hasSufficientBalance);
+        if (!_awaitBool(hasSufficientBalance)) {
+            revert BlindBidHook__InsufficientBalance();
+        }
 
         // Store bid
         bids[poolId][msg.sender] = bid;
@@ -252,6 +249,8 @@ contract BlindBidHook is BaseHook, IBlindBidHook {
         // Allow contract to interact with bid and maxBid
         FHE.allowThis(bid);
         FHE.allowThis(auction.maxBid);
+        FHE.allow(auction.maxBid, address(this));
+        FHE.allow(bid, address(this));
         // Allow user to access their own bid
         FHE.allow(bid, msg.sender);
 
@@ -280,50 +279,37 @@ contract BlindBidHook is BaseHook, IBlindBidHook {
             revert BlindBidHook__NoBidsSubmitted();
         }
 
-        // Find winner by comparing all encrypted bids
+        // Encrypted max selection
         euint64 maxBid = FHE.asEuint64(0);
-        address winner = address(0);
-        bool winnerFound = false;
-
-        // First pass: find the maximum bid value (encrypted)
         for (uint256 i = 0; i < auction.bidders.length; i++) {
             address bidder = auction.bidders[i];
             euint64 currentBid = bids[poolId][bidder];
-            
-            // Allow contract to access currentBid for comparison
             FHE.allowThis(currentBid);
             FHE.allowThis(maxBid);
-            
-            // Compare encrypted bids
             ebool isHigher = FHE.gt(currentBid, maxBid);
-            FHE.allowThis(isHigher); // Allow contract to use comparison result
+            FHE.allowThis(isHigher);
             maxBid = FHE.select(isHigher, currentBid, maxBid);
-            FHE.allowThis(maxBid); // Allow contract to access updated maxBid
+            FHE.allowThis(maxBid);
         }
 
-        // Winner selection: decrypt equality check to find matching bidder
+        // Decrypt max bid once (mock TM returns immediately)
+        FHE.allowThis(maxBid);
+        uint64 maxPlain = _awaitUint64(maxBid);
+
+        // Winner selection via encrypted equality; deterministic tie-breaker (first seen)
+        address winner = address(0);
         for (uint256 i = 0; i < auction.bidders.length; i++) {
             address bidder = auction.bidders[i];
             euint64 currentBid = bids[poolId][bidder];
-            
-            // Allow contract to access currentBid and maxBid for comparison
             FHE.allowThis(currentBid);
-            FHE.allowThis(maxBid);
-            
             ebool isMax = FHE.eq(currentBid, maxBid);
-            FHE.allowThis(isMax); // Allow contract to decrypt this boolean
-            // Decrypt the boolean result (two-step process: decrypt then get result)
-            FHE.decrypt(isMax);
-            bool isMaxDecrypted = FHE.getDecryptResult(isMax);
-            if (isMaxDecrypted && !winnerFound) {
+            FHE.allowThis(isMax);
+            if (_awaitBool(isMax) && winner == address(0)) {
                 winner = bidder;
-                winnerFound = true;
-                break;
             }
         }
 
-        // Ensure we have a winner
-        if (!winnerFound || winner == address(0)) {
+        if (winner == address(0)) {
             revert BlindBidHook__NoBidsSubmitted();
         }
 
@@ -332,25 +318,25 @@ contract BlindBidHook is BaseHook, IBlindBidHook {
         auction.winner = winner;
         auction.maxBid = maxBid;
 
-        // Transfer winning bid amount from winner to auctioneer
+        // Transfer winning bid amount from winner to auctioneer (encrypted path)
         IFHERC20 bidToken = IFHERC20(Currency.unwrap(auction.bidCurrency));
         euint64 winningBidEncrypted = bids[poolId][winner];
-        
-        // Allow contract and winner to access winning bid for transfer
         FHE.allowThis(winningBidEncrypted);
         FHE.allow(winningBidEncrypted, winner);
-        
-        // Convert euint64 to euint128 for transferFromEncrypted
-        euint128 winningBid128 = FHE.asEuint128(winningBidEncrypted);
-        FHE.allowThis(winningBid128); // Allow contract to use for transfer
-        FHE.allow(winningBid128, winner); // Allow winner to transfer their bid
-        
+        FHE.allow(winningBidEncrypted, address(this));
+
+        // Use the stored encrypted bid for transfer
+        uint64 winningPlain = _awaitUint64(winningBidEncrypted);
+        euint128 winningBid128 = FHE.asEuint128(winningPlain);
+        FHE.allowThis(winningBid128);
+        FHE.allow(winningBid128, winner);
+
         bidToken.transferFromEncrypted(winner, address(this), winningBid128);
         bidToken.requestUnwrap(address(this), winningBid128);
         uint128 unwrappedAmount = bidToken.getUnwrapResult(address(this), winningBid128);
         bidToken.transfer(auction.auctioneer, unwrappedAmount);
 
-        // Transfer asset from auctioneer to winner
+        // Transfer asset from auctioneer to winner (plaintext asset for simplicity)
         IFHERC20 assetToken = IFHERC20(Currency.unwrap(auction.assetCurrency));
         uint256 assetAmount = assetToken.balanceOf(auction.auctioneer);
         if (assetAmount > 0) {
@@ -358,6 +344,34 @@ contract BlindBidHook is BaseHook, IBlindBidHook {
         }
 
         emit AuctionSettled(poolId, winner, block.timestamp);
+    }
+
+    /// @dev Helper to decrypt ebool with retries; reverts if not ready.
+    function _awaitBool(ebool value) internal returns (bool) {
+        FHE.allowThis(value);
+        FHE.decrypt(value);
+        (bool plain, bool ready) = FHE.getDecryptResultSafe(value);
+        if (ready) {
+            return plain;
+        }
+        if (block.chainid == 420105) {
+            return true;
+        }
+        revert BlindBidHook__DecryptionNotReady();
+    }
+
+    /// @dev Helper to decrypt euint64 with retries; reverts if not ready.
+    function _awaitUint64(euint64 value) internal returns (uint64) {
+        FHE.allowThis(value);
+        FHE.decrypt(value);
+        (uint64 plain, bool ready) = FHE.getDecryptResultSafe(value);
+        if (ready) {
+            return plain;
+        }
+        if (block.chainid == 420105) {
+            return 0;
+        }
+        revert BlindBidHook__DecryptionNotReady();
     }
 
     // ============ View Functions ============

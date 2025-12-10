@@ -3,7 +3,7 @@ pragma solidity ^0.8.25;
 
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IFHERC20} from "../../src/interface/IFHERC20.sol";
-import {InEuint128, euint128} from "@fhenixprotocol/cofhe-contracts/FHE.sol";
+import {FHE, InEuint128, euint128} from "@fhenixprotocol/cofhe-contracts/FHE.sol";
 
 contract MockFHERC20 is ERC20, IFHERC20 {
     mapping(address => euint128) private _encBalances;
@@ -19,11 +19,18 @@ contract MockFHERC20 is ERC20, IFHERC20 {
     }
 
     // Encrypted mint/burn (store as-is)
-    function mintEncrypted(address user, InEuint128 memory) external override {
-        _encBalances[user] = euint128.wrap(0); // dummy
+    function mintEncrypted(address user, InEuint128 memory amount) external override {
+        euint128 encAmount = FHE.asEuint128(amount);
+        _encBalances[user] = encAmount;
+        // Allow this contract and the user to access the balance
+        FHE.allowThis(_encBalances[user]);
+        FHE.allow(_encBalances[user], user);
     }
     function mintEncrypted(address user, euint128 amount) external override {
         _encBalances[user] = amount;
+        // Allow this contract and the user to access the balance
+        FHE.allowThis(_encBalances[user]);
+        FHE.allow(_encBalances[user], user);
     }
     function burnEncrypted(address, InEuint128 memory) external pure override {}
     function burnEncrypted(address, euint128) external pure override {}
@@ -51,6 +58,12 @@ contract MockFHERC20 is ERC20, IFHERC20 {
     // View
     function encBalances(address user) external view override returns (euint128) {
         return _encBalances[user];
+    }
+    
+    // Helper function to allow hook to access a user's balance
+    function allowHookAccess(address user, address hook) external {
+        FHE.allowThis(_encBalances[user]);
+        FHE.allow(_encBalances[user], hook);
     }
 }
 
